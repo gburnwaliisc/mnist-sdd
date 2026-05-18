@@ -1,0 +1,108 @@
+# ===========================================================================
+# requirements.txt — MNIST SDD Project  (SDD-MNIST-001 v2.0.0)
+# Python 3.10+  |  CPU and CUDA supported
+# ===========================================================================
+#
+# Quick start:
+#   pip install -r requirements.txt
+#
+# For GPU (CUDA) — replace torch + torchvision with the CUDA-enabled wheels
+# from https://pytorch.org/get-started/locally/ before running the above.
+# Example for CUDA 12.8:
+#   pip install torch torchvision \
+#       --index-url https://download.pytorch.org/whl/cu128
+#
+# ---------------------------------------------------------------------------
+# torch / torchvision VERSION PAIRING (critical — see CLAUDE.md §11.2)
+# ---------------------------------------------------------------------------
+# Mismatched versions cause silent incorrect transform behaviour, not an
+# import error.  The torchvision minor version must equal torch minor - 15:
+#
+#   torch 2.1  →  torchvision 0.16
+#   torch 2.2  →  torchvision 0.17
+#   torch 2.3  →  torchvision 0.18
+#   torch 2.4  →  torchvision 0.19
+#   torch 2.5  →  torchvision 0.20
+#   torch 2.6  →  torchvision 0.21
+#   torch 2.7  →  torchvision 0.22
+#   torch 2.12 →  torchvision 0.27    ← verified working environment
+#
+# See https://github.com/pytorch/vision#installation for the full matrix.
+# ---------------------------------------------------------------------------
+#
+# For an exact reproducible lock of the entire dependency tree, run:
+#   pip freeze > requirements-lock.txt
+# after installation.
+# ===========================================================================
+
+
+# ── Core: deep learning ─────────────────────────────────────────────────────
+
+# Minimum 2.1.0 required by SPEC §3.  APIs used that set this floor:
+#   - weights_only parameter to torch.load()   (added 2.0)
+#   - torch.Generator for DataLoader seeding   (added 1.6, stable 2.x)
+#   - torch.backends.cudnn deterministic flags (stable 2.x)
+# Tested: 2.12.0+cpu
+torch>=2.1.0
+
+# Must form a matched pair with torch (see pairing table above).
+# Provides: torchvision.datasets.MNIST, torchvision.transforms.*
+# Tested: 0.27.0+cpu
+torchvision>=0.16.0
+
+
+# ── Data processing ──────────────────────────────────────────────────────────
+
+# Used in: src/utils.py (set_seed), src/data/dataset.py (worker seeding,
+#           label arrays), tests/ (synthetic data construction).
+# numpy 2.0 introduced breaking changes; 1.24 is the last widely compatible
+# 1.x release.  Both 1.x and 2.x are supported by this codebase.
+# Tested: 2.4.5
+numpy>=1.24.0
+
+# Used in: src/data/dataset.py — StratifiedShuffleSplit for the 54k/6k
+#           train/val split.  API stable since 0.18; 1.2 is a clean minimum.
+# Tested: 1.8.0
+scikit-learn>=1.2.0
+
+# Used in: src/evaluation/evaluator.py and inference pipeline (Phase 5) —
+#           PIL.Image for opening/resizing/converting user-supplied images.
+#           Also a transitive dependency of torchvision.
+# Tested: 12.2.0
+Pillow>=9.4.0
+
+# Used in: scripts/visualize.py (Phase 4) for loading metrics.csv and
+#           aggregating multi-run results.  Referenced in CLAUDE.md §4.6.
+#           Transitive dependency of scikit-learn and optuna.
+# Tested: 3.0.3
+pandas>=2.0.0
+
+
+# ── Visualisation ─────────────────────────────────────────────────────────────
+
+# Used in: src/utils.py (plot_training_curves),
+#           src/evaluation/evaluator.py (confusion matrix heatmap).
+# Agg backend selected at import time — no display server required (headless).
+# matplotlib 3.7 is the first release with stable constrained_layout.
+# Tested: 3.10.9
+matplotlib>=3.7.0
+
+
+# ── Config & serialisation ────────────────────────────────────────────────────
+
+# Used in: src/training/trainer.py (yaml.dump for config snapshot),
+#           src/config.py (yaml.safe_load — Phase 0).
+# PyYAML 6.0 closed a remote-code-execution vulnerability in yaml.load();
+# 6.0.0 is the unconditional minimum for security.
+# Tested: 6.0.3
+PyYAML>=6.0.0
+
+
+# ── Hyperparameter tuning ─────────────────────────────────────────────────────
+
+# Used in: src/tuning/tuner.py and scripts/tune.py (Phase 7).
+# Optuna 3.0 changed Trial.report() and MedianPruner APIs in breaking ways;
+# 2.x is explicitly excluded (see CLAUDE.md §11.3).
+# Safe to omit if hyperparameter tuning is not required.
+# Tested: not yet installed — pip will resolve the latest >=3.0 release.
+optuna>=3.0.0

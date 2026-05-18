@@ -1,0 +1,32 @@
+# ===========================================================================
+# requirements-dev.txt — Development and Testing Dependencies
+# MNIST SDD Project  (SDD-MNIST-001 v2.0.0)
+# ===========================================================================
+#
+# Install after the runtime requirements:
+#   pip install -r requirements.txt
+#   pip install -r requirements-dev.txt
+#
+# Or in one command:
+#   pip install -r requirements-dev.txt
+# (The -r line below pulls runtime deps automatically.)
+#
+# These packages are NOT needed to run training, evaluation, or inference.
+# A deployment or inference-only environment should only install
+# requirements.txt.
+# ===========================================================================
+
+# Pull all runtime dependencies first
+-r requirements.txt
+
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+
+# Test runner.  pytest 7.4 introduced the more informative assertion
+# introspection used in the test suite.
+# Tested: 9.0.3
+pytest>=7.4.0
+
+# Coverage measurement and reporting.
+# Tested: installed via pytest-cov pull
+pytest-cov>=4.1.0
