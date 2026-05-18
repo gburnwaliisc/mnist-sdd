@@ -164,6 +164,10 @@ class Trainer:
         else:
             self.early_stopping = None
 
+        # Training loss settings
+        self.label_smoothing: float = t.get("label_smoothing", 0.0)
+        self.grad_clip: float       = t.get("grad_clip", 0.0)
+
         # State
         self._epoch_metrics: list[dict] = []
         self._best_metric_value: float  = (
@@ -326,7 +330,7 @@ class Trainer:
     # ── Private helpers ─────────────────────────────────────────────────────
 
     def _train_epoch(self, loader: DataLoader) -> float:
-        criterion  = nn.CrossEntropyLoss()
+        criterion  = nn.CrossEntropyLoss(label_smoothing=self.label_smoothing)
         loss_meter = AverageMeter()
 
         for images, labels in loader:
@@ -338,8 +342,13 @@ class Trainer:
             logits = self.model(images)
             loss   = criterion(logits, labels)
             loss.backward()
-            self.optimizer.step()
 
+            if self.grad_clip > 0.0:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.grad_clip
+                )
+
+            self.optimizer.step()
             loss_meter.update(loss.item(), n=bs)
 
         return loss_meter.avg

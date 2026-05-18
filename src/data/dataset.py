@@ -80,6 +80,16 @@ def build_transforms(cfg: dict, *, augment: bool = False) -> transforms.Compose:
     #    recomputed at runtime.  See CLAUDE.md §7.2 for the rationale.
     pipeline.append(transforms.Normalize(mean=[mean], std=[std]))
 
+    # 3b. Tensor-level augmentation (training split only) --------------------
+    #     RandomErasing occludes a random rectangular patch, forcing the model
+    #     to recognise digits from partial strokes.  p=0.1 is conservative:
+    #     only 1 in 10 images gets erased, so gradient signal is unaffected on
+    #     the remaining 90 %.  Must follow ToTensor+Normalize (tensor input).
+    if augment and data_cfg.get("augmentation", False):
+        pipeline.append(
+            transforms.RandomErasing(p=0.1, scale=(0.02, 0.2), ratio=(0.3, 3.3))
+        )
+
     # 4. Architecture-specific flatten ---------------------------------------
     #    The CNN forward pass expects (B, 1, 28, 28).
     #    The MLP forward pass expects (B, 784).

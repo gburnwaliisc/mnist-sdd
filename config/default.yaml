@@ -1,0 +1,104 @@
+# =============================================================================
+# MNIST SDD Project — Default Configuration
+# SDD-MNIST-001 v2.0.0   (SPEC §14)
+# =============================================================================
+# Override keys from CLI scripts via --set flags, e.g.:
+#     python scripts/train.py --set training.epochs=50
+# Tuned for reliable >98 % test accuracy with the default CNN architecture.
+# =============================================================================
+
+seed: 42
+
+# ── Data pipeline ─────────────────────────────────────────────────────────────
+data:
+  root: ./data               # MNIST download / cache directory
+  batch_size: 128            # 128 converges faster than 64 without accuracy loss
+  num_workers: 2             # DataLoader subprocess workers (0 = in-process)
+  pin_memory: true           # Pin host memory for faster GPU transfers
+  val_split: 0.1             # Fraction of 60 k training set held out for val
+  augmentation: true         # Enable training-time augmentation (see below)
+  #   RandomAffine(degrees=10, translate=(0.1, 0.1))  — geometric jitter
+  #   RandomErasing(p=0.1, scale=(0.02, 0.2))         — random occlusion
+  normalize:
+    mean: 0.1307             # MNIST training-set channel mean (fixed constant)
+    std:  0.3081             # MNIST training-set channel std  (fixed constant)
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model:
+  arch: cnn                  # 'cnn' | 'mlp'
+  num_classes: 10
+
+  # CNN-specific ──────────────────────────────────────────────────────────────
+  conv_channels: [32, 64]    # Output channels per conv block; len = n_blocks
+  fc_hidden: 512             # FC hidden-layer width; 512 > 256 improves capacity
+  use_batchnorm: true        # BatchNorm2d after every Conv2d
+
+  # MLP-specific ──────────────────────────────────────────────────────────────
+  input_size: 784
+  hidden_layers: [256, 128]
+
+  # Shared ────────────────────────────────────────────────────────────────────
+  activation: relu           # 'relu' | 'gelu'
+  dropout: 0.25              # 0.25 is less aggressive than 0.5; better for MNIST
+
+# ── Training ──────────────────────────────────────────────────────────────────
+training:
+  epochs: 30                 # 30 gives cosine annealing full convergence time
+  optimizer: adam            # 'adam' | 'sgd'
+  learning_rate: 1.0e-3      # Adam default; works well at this batch size
+  weight_decay: 1.0e-4       # Mild L2 regularisation
+  momentum: 0.9              # SGD momentum (ignored when optimizer='adam')
+  label_smoothing: 0.1       # Cross-entropy label smoothing; reduces overfit
+  grad_clip: 1.0             # Max gradient l2-norm (0.0 = disabled)
+
+  lr_scheduler:
+    type: cosine             # 'none' | 'step' | 'cosine' | 'plateau'
+    T_max: 30                # Cosine period = epochs so LR anneals fully
+    step_size: 10            # StepLR: decay every N epochs
+    gamma: 0.1               # StepLR decay factor; Plateau LR multiplier
+    factor: 0.5              # ReduceLROnPlateau reduction factor
+    patience: 3              # ReduceLROnPlateau patience
+
+  early_stopping:
+    enabled: true
+    monitor: val_loss        # 'val_loss' (lower=better) | 'val_acc' (higher=better)
+    patience: 8              # patience=8 allows cosine LR to complete its descent
+    min_delta: 0.0001        # Ignore noise-level changes in val_loss
+
+  checkpoint:
+    dir: ./checkpoints       # Root dir; each run gets a sub-dir named by run_id
+    save_best_only: true     # best.pt and last.pt are always written
+    save_every_epoch: false  # Set true to write epoch_{n:03d}.pt each epoch
+
+  log_dir: ./runs            # Root dir for per-run CSVs, logs, and plots
+  resume: null               # Path to last.pt to resume; null = start fresh
+  auto_visualize: false      # Plot training curves automatically at end of fit()
+
+# ── Inference ─────────────────────────────────────────────────────────────────
+inference:
+  checkpoint: ./checkpoints/best.pt
+  device: auto               # 'cpu' | 'cuda' | 'auto'
+
+# ── Hyperparameter Tuning ─────────────────────────────────────────────────────
+tuning:
+  n_trials: 50
+  timeout: null              # Wall-clock time budget (seconds); null = unlimited
+  direction: maximize
+  metric: val_acc
+  storage: null              # null = in-memory; 'sqlite:///study.db' for durable
+  search_space:
+    learning_rate:
+      type: float
+      low: 1.0e-4
+      high: 1.0e-2
+      log: true
+    dropout:
+      type: float
+      low: 0.1
+      high: 0.5
+    fc_hidden:
+      type: categorical
+      choices: [256, 512]
+    optimizer:
+      type: categorical
+      choices: [adam, sgd]
