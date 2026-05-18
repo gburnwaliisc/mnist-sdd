@@ -18,9 +18,10 @@ venv/
 env/
 
 # Data & checkpoints (large binaries)
-data/
-checkpoints/
-runs/
+# Leading slash anchors to repo root — prevents matching src/data/
+/data/
+/checkpoints/
+/runs/
 
 # Jupyter
 .ipynb_checkpoints/
