@@ -24,16 +24,10 @@ SPEC reference: SDD-MNIST-001 §8, §9, §10
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import time
 from pathlib import Path
 from typing import Optional
 
-import matplotlib
-matplotlib.use("Agg")  # must precede pyplot import
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import yaml
@@ -41,10 +35,17 @@ from torch.utils.data import DataLoader
 
 from src.training.early_stopping import EarlyStopping
 from src.training.metrics import (
-    compute_accuracy,
     compute_confusion_matrix,
     compute_macro_f1,
     compute_per_class_accuracy,
+)
+from src.utils import (
+    AverageMeter,
+    Timer,
+    load_checkpoint,
+    plot_training_curves,
+    save_checkpoint,
+    save_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -205,16 +206,15 @@ class Trainer:
         final_metrics: dict = {}
 
         for epoch in range(start_epoch, self.epochs + 1):
-            t0 = time.time()
+            with Timer() as epoch_timer:
+                self.model.train()
+                train_loss = self._train_epoch(train_loader)
 
-            self.model.train()
-            train_loss = self._train_epoch(train_loader)
+                self.model.eval()
+                val_loss, val_acc = self._validate(val_loader)
 
-            self.model.eval()
-            val_loss, val_acc = self._validate(val_loader)
-
-            lr = self.optimizer.param_groups[0]["lr"]
-            elapsed = time.time() - t0
+            lr      = self.optimizer.param_groups[0]["lr"]
+            elapsed = epoch_timer.elapsed
 
             metrics = {
                 "epoch":      epoch,
@@ -270,20 +270,16 @@ class Trainer:
         """
         best_path = self.ckpt_dir / "best.pt"
         if best_path.exists():
-            # weights_only=False because checkpoint contains non-tensor objects
-            # (config dict, metrics dict).  Source is trusted (written by this code).
-            ckpt = torch.load(best_path, map_location=self.device, weights_only=False)
+            ckpt = load_checkpoint(best_path, device=self.device)
             self.model.load_state_dict(ckpt["model_state"])
             logger.info("Loaded best.pt from epoch %d for test evaluation.", ckpt["epoch"])
         else:
             logger.warning("best.pt not found; evaluating with current model weights.")
 
         self.model.eval()
-        criterion = nn.CrossEntropyLoss()
-
-        total_loss = 0.0
-        total_samples = 0
-        all_preds: list[torch.Tensor]  = []
+        criterion  = nn.CrossEntropyLoss()
+        loss_meter = AverageMeter()
+        all_preds:  list[torch.Tensor] = []
         all_labels: list[torch.Tensor] = []
 
         with torch.no_grad():
@@ -291,11 +287,9 @@ class Trainer:
                 images = images.to(self.device)
                 labels = labels.to(self.device)
                 logits = self.model(images)
-                loss   = criterion(logits, labels)
                 bs     = labels.size(0)
 
-                total_loss    += loss.item() * bs
-                total_samples += bs
+                loss_meter.update(criterion(logits, labels).item(), n=bs)
                 all_preds.append(logits.argmax(dim=1).cpu())
                 all_labels.append(labels.cpu())
 
@@ -305,11 +299,11 @@ class Trainer:
         all_labels_t = torch.cat(all_labels)
 
         num_classes = self.cfg["model"]["num_classes"]
-        test_loss    = total_loss / total_samples
-        test_acc     = (all_preds_t == all_labels_t).float().mean().item()
-        per_cls_acc  = compute_per_class_accuracy(all_preds_t, all_labels_t, num_classes)
-        cm           = compute_confusion_matrix(all_preds_t, all_labels_t, num_classes)
-        macro_f1     = compute_macro_f1(all_preds_t, all_labels_t, num_classes)
+        test_loss   = loss_meter.avg
+        test_acc    = (all_preds_t == all_labels_t).float().mean().item()
+        per_cls_acc = compute_per_class_accuracy(all_preds_t, all_labels_t, num_classes)
+        cm          = compute_confusion_matrix(all_preds_t, all_labels_t, num_classes)
+        macro_f1    = compute_macro_f1(all_preds_t, all_labels_t, num_classes)
 
         results = {
             "test_loss":        test_loss,
@@ -324,23 +318,21 @@ class Trainer:
             test_loss, test_acc, macro_f1,
         )
 
-        out_path = self.run_dir / "test_results.json"
-        with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2)
-        logger.info("Test results saved to %s", out_path)
+        save_json(results, self.run_dir / "test_results.json")
+        logger.info("Test results saved to %s", self.run_dir / "test_results.json")
 
         return results
 
     # ── Private helpers ─────────────────────────────────────────────────────
 
     def _train_epoch(self, loader: DataLoader) -> float:
-        criterion = nn.CrossEntropyLoss()
-        total_loss = 0.0
-        total_samples = 0
+        criterion  = nn.CrossEntropyLoss()
+        loss_meter = AverageMeter()
 
         for images, labels in loader:
             images = images.to(self.device)
             labels = labels.to(self.device)
+            bs     = labels.size(0)
 
             self.optimizer.zero_grad()
             logits = self.model(images)
@@ -348,33 +340,30 @@ class Trainer:
             loss.backward()
             self.optimizer.step()
 
-            bs             = labels.size(0)
-            total_loss    += loss.item() * bs
-            total_samples += bs
+            loss_meter.update(loss.item(), n=bs)
 
-        return total_loss / total_samples
+        return loss_meter.avg
 
     def _validate(self, loader: DataLoader) -> tuple[float, float]:
-        criterion = nn.CrossEntropyLoss()
-        total_loss = 0.0
-        total_correct = 0
-        total_samples = 0
+        criterion    = nn.CrossEntropyLoss()
+        loss_meter   = AverageMeter()
+        correct_meter = AverageMeter()
 
         with torch.no_grad():
             for images, labels in loader:
                 images = images.to(self.device)
                 labels = labels.to(self.device)
                 logits = self.model(images)
-                loss   = criterion(logits, labels)
                 bs     = labels.size(0)
 
-                total_loss    += loss.item() * bs
-                total_correct += (logits.argmax(dim=1) == labels).sum().item()
-                total_samples += bs
+                loss_meter.update(criterion(logits, labels).item(), n=bs)
+                # Pass batch-accuracy fraction so AverageMeter accumulates
+                # total_correct / total_samples correctly across variable-size batches.
+                correct_meter.update(
+                    (logits.argmax(dim=1) == labels).float().mean().item(), n=bs
+                )
 
-        val_loss = total_loss / total_samples
-        val_acc  = total_correct / total_samples
-        return val_loss, val_acc
+        return loss_meter.avg, correct_meter.avg
 
     def _is_improvement(self, value: float) -> bool:
         if self._monitor == "val_loss":
@@ -383,16 +372,17 @@ class Trainer:
             return value > self._best_metric_value
 
     def _save_checkpoint(self, filename: str, epoch: int, metrics: dict) -> None:
-        payload = {
-            "epoch":           epoch,
-            "model_state":     self.model.state_dict(),
-            "optimizer_state": self.optimizer.state_dict(),
-            "scheduler_state": self.scheduler.state_dict() if self.scheduler else None,
-            "metrics":         metrics,
-            "config":          self.cfg,
-        }
-        path = self.ckpt_dir / filename
-        torch.save(payload, path)
+        save_checkpoint(
+            payload={
+                "epoch":           epoch,
+                "model_state":     self.model.state_dict(),
+                "optimizer_state": self.optimizer.state_dict(),
+                "scheduler_state": self.scheduler.state_dict() if self.scheduler else None,
+                "metrics":         metrics,
+                "config":          self.cfg,
+            },
+            path=self.ckpt_dir / filename,
+        )
 
     def _log_epoch(self, metrics: dict, elapsed: float) -> None:
         logger.info(
@@ -417,35 +407,11 @@ class Trainer:
             writer.writerow(metrics)
 
     def _plot_training_curves(self) -> None:
-        if not self._epoch_metrics:
-            return
-
-        epochs     = [m["epoch"]      for m in self._epoch_metrics]
-        train_loss = [m["train_loss"] for m in self._epoch_metrics]
-        val_loss   = [m["val_loss"]   for m in self._epoch_metrics]
-        val_acc    = [m["val_acc"]    for m in self._epoch_metrics]
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
-
-        ax1.plot(epochs, train_loss, label="Train loss")
-        ax1.plot(epochs, val_loss,   label="Val loss")
-        ax1.set_xlabel("Epoch")
-        ax1.set_ylabel("Loss")
-        ax1.set_title("Loss curves")
-        ax1.legend()
-        ax1.grid(True)
-
-        ax2.plot(epochs, val_acc, color="tab:green", label="Val accuracy")
-        ax2.set_xlabel("Epoch")
-        ax2.set_ylabel("Accuracy")
-        ax2.set_title("Validation accuracy")
-        ax2.legend()
-        ax2.grid(True)
-
-        fig.tight_layout()
-        fig.savefig(self.plot_path, dpi=150)
-        plt.close(fig)
-        logger.info("Training curves saved to %s", self.plot_path)
+        plot_training_curves(
+            self._epoch_metrics,
+            output_path=self.plot_path,
+            title=self.run_id,
+        )
 
     def _save_config_snapshot(self) -> None:
         cfg_path = self.run_dir / "config.yaml"
@@ -475,7 +441,7 @@ class Trainer:
             logger.warning("Resume checkpoint not found: %s — starting from epoch 1.", path)
             return 1
 
-        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        ckpt = load_checkpoint(path, device=self.device)
         self.model.load_state_dict(ckpt["model_state"])
         self.optimizer.load_state_dict(ckpt["optimizer_state"])
         if self.scheduler and ckpt.get("scheduler_state") is not None:
