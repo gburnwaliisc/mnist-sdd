@@ -82,6 +82,75 @@ def compute_confusion_matrix(
     return cm.reshape(num_classes, num_classes)
 
 
+def compute_classification_report(
+    all_preds: torch.Tensor,
+    all_labels: torch.Tensor,
+    num_classes: int = 10,
+) -> dict:
+    """
+    Per-class and macro-averaged precision, recall, F1, and support.
+
+    All quantities are derived from the confusion matrix — no sklearn
+    dependency is required.
+
+    Precision_k = C[k,k] / C[:,k].sum()   (column k = all predicted-k)
+    Recall_k    = C[k,k] / C[k,:].sum()   (row    k = all true-k)
+    F1_k        = 2 · P_k · R_k / (P_k + R_k)
+    Zero denominators produce 0.0 (not NaN or ZeroDivisionError).
+
+    Args:
+        all_preds:   (N,) predicted class indices.
+        all_labels:  (N,) true class indices.
+        num_classes: Number of classes.
+
+    Returns:
+        dict with keys:
+            'per_class' : list of dicts, one per class:
+                          {'class', 'precision', 'recall', 'f1', 'support'}
+            'macro'     : dict {'precision', 'recall', 'f1'}
+            'accuracy'  : float — overall accuracy
+            'n_samples' : int — total samples evaluated
+    """
+    cm = compute_confusion_matrix(all_preds, all_labels, num_classes)
+    n_samples = len(all_labels)
+    accuracy  = (all_preds == all_labels).float().mean().item()
+
+    per_class = []
+    for k in range(num_classes):
+        tp = cm[k, k].item()
+        fp = cm[:, k].sum().item() - tp   # predicted k but not true k
+        fn = cm[k, :].sum().item() - tp   # true k but not predicted k
+        support = cm[k, :].sum().item()
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall    = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        denom     = precision + recall
+        f1        = 2 * precision * recall / denom if denom > 0 else 0.0
+
+        per_class.append({
+            "class":     k,
+            "precision": precision,
+            "recall":    recall,
+            "f1":        f1,
+            "support":   int(support),
+        })
+
+    macro_precision = sum(c["precision"] for c in per_class) / num_classes
+    macro_recall    = sum(c["recall"]    for c in per_class) / num_classes
+    macro_f1        = sum(c["f1"]        for c in per_class) / num_classes
+
+    return {
+        "per_class": per_class,
+        "macro": {
+            "precision": macro_precision,
+            "recall":    macro_recall,
+            "f1":        macro_f1,
+        },
+        "accuracy":  accuracy,
+        "n_samples": n_samples,
+    }
+
+
 def compute_macro_f1(
     all_preds: torch.Tensor,
     all_labels: torch.Tensor,
